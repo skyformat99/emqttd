@@ -1,28 +1,167 @@
 %%-*- mode: erlang -*-
-%% EMQ config mapping
+%% EMQ R2.3 config mapping
 
 %%--------------------------------------------------------------------
 %% Cluster
 %%--------------------------------------------------------------------
 
-%% Cluster ID
-{mapping, "cluster.id", "emqttd.cluster", [
-  {default, "emq"},
+%% @doc Cluster name
+{mapping, "cluster.name", "ekka.cluster_name", [
+  {default, emqcl},
+  {datatype, atom}
+]}.
+
+%% @doc Cluster discovery
+{mapping, "cluster.discovery", "ekka.cluster_discovery", [
+  {default, manual},
+  {datatype, atom}
+]}.
+
+%% @doc Clean down node from the cluster
+{mapping, "cluster.autoclean", "ekka.cluster_autoclean", [
+  {datatype, {duration, ms}}
+]}.
+
+%% @doc Cluster autoheal
+{mapping, "cluster.autoheal", "ekka.cluster_autoheal", [
+  {datatype, flag},
+  {default, off}
+]}.
+
+%%--------------------------------------------------------------------
+%% Cluster by static node list
+
+{mapping, "cluster.static.seeds", "ekka.cluster_discovery", [
   {datatype, string}
 ]}.
 
-%% Cluster Multicast Addr
-{mapping, "cluster.multicast", "emqttd.cluster", [
-  {default, "239.192.0.1:44369"},
+%%--------------------------------------------------------------------
+%% Cluster by UDP Multicast
+
+{mapping, "cluster.mcast.addr", "ekka.cluster_discovery", [
+  {default, "239.192.0.1"},
   {datatype, string}
 ]}.
 
-{translation, "emqttd.cluster", fun(Conf) ->
-    Multicast = cuttlefish:conf_get("cluster.multicast", Conf),
-    [Addr, Port] = string:tokens(Multicast, ":"),
-    {ok, Ip} = inet_parse:address(Addr),
-    [{id, cuttlefish:conf_get("cluster.id", Conf)},
-     {multicast, {Ip, list_to_integer(Port)}}]
+{mapping, "cluster.mcast.ports", "ekka.cluster_discovery", [
+  {default, "4369"},
+  {datatype, string}
+]}.
+
+{mapping, "cluster.mcast.iface", "ekka.cluster_discovery", [
+  {datatype, string},
+  {default, "0.0.0.0"}
+]}.
+
+{mapping, "cluster.mcast.ttl", "ekka.cluster_discovery", [
+  {datatype, integer},
+  {default, 255}
+]}.
+
+{mapping, "cluster.mcast.loop", "ekka.cluster_discovery", [
+  {datatype, flag},
+  {default, on}
+]}.
+
+{mapping, "cluster.mcast.sndbuf", "ekka.cluster_discovery", [
+  {datatype, bytesize},
+  {default, "16KB"}
+]}.
+
+{mapping, "cluster.mcast.recbuf", "ekka.cluster_discovery", [
+  {datatype, bytesize},
+  {default, "16KB"}
+]}.
+
+{mapping, "cluster.mcast.buffer", "ekka.cluster_discovery", [
+  {datatype, bytesize},
+  {default, "32KB"}
+]}.
+
+%%--------------------------------------------------------------------
+%% Cluster by DNS A Record
+
+{mapping, "cluster.dns.name", "ekka.cluster_discovery", [
+  {datatype, string}
+]}.
+
+{mapping, "cluster.dns.app", "ekka.cluster_discovery", [
+  {datatype, string}
+]}.
+
+%%--------------------------------------------------------------------
+%% Cluster using etcd
+
+{mapping, "cluster.etcd.server", "ekka.cluster_discovery", [
+  {datatype, string}
+]}.
+
+{mapping, "cluster.etcd.prefix", "ekka.cluster_discovery", [
+  {datatype, string}
+]}.
+
+{mapping, "cluster.etcd.node_ttl", "ekka.cluster_discovery", [
+  {datatype, {duration, ms}},
+  {default, "1m"}
+]}.
+
+%%--------------------------------------------------------------------
+%% Cluster on K8s
+
+{mapping, "cluster.k8s.apiserver", "ekka.cluster_discovery", [
+  {datatype, string}
+]}.
+
+{mapping, "cluster.k8s.service_name", "ekka.cluster_discovery", [
+  {datatype, string}
+]}.
+
+{mapping, "cluster.k8s.address_type", "ekka.cluster_discovery", [
+  {datatype, {enum, [ip, dns]}}
+]}.
+
+{mapping, "cluster.k8s.app_name", "ekka.cluster_discovery", [
+  {datatype, string}
+]}.
+
+{mapping, "cluster.k8s.namespace", "ekka.cluster_discovery", [
+  {datatype, string}
+]}.
+
+{translation, "ekka.cluster_discovery", fun(Conf) ->
+  Strategy = cuttlefish:conf_get("cluster.discovery", Conf),
+  Filter  = fun(Opts) -> [{K, V} || {K, V} <- Opts, V =/= undefined] end,
+  IpPort = fun(S) ->
+             [Addr, Port] = string:tokens(S, ":"),
+             {ok, Ip} = inet:parse_address(Addr),
+             {Ip, Port}
+           end,
+  Options = fun(static) ->
+                 [{seeds, [list_to_atom(S) || S <- string:tokens(cuttlefish:conf_get("cluster.static.seeds", Conf, ""), ",")]}];
+               (mcast) ->
+                 {ok, Addr} = inet:parse_address(cuttlefish:conf_get("cluster.mcast.addr", Conf)),
+                 {ok, Iface} = inet:parse_address(cuttlefish:conf_get("cluster.mcast.iface", Conf)),
+                 Ports = [list_to_integer(S) || S <- string:tokens(cuttlefish:conf_get("cluster.mcast.ports", Conf), ",")],
+                 [{addr, Addr}, {ports, Ports}, {iface, Iface},
+                  {ttl, cuttlefish:conf_get("cluster.mcast.ttl", Conf, 1)},
+                  {loop, cuttlefish:conf_get("cluster.mcast.loop", Conf, true)}];
+               (dns) ->
+                 [{name, cuttlefish:conf_get("cluster.dns.name", Conf)},
+                  {app, cuttlefish:conf_get("cluster.dns.app", Conf)}];
+               (etcd) ->
+                 [{server, string:tokens(cuttlefish:conf_get("cluster.etcd.server", Conf), ",")},
+                  {prefix, cuttlefish:conf_get("cluster.etcd.prefix", Conf, "emqcl")},
+                  {node_ttl, cuttlefish:conf_get("cluster.etcd.node_ttl", Conf, 60)}];
+               (k8s) ->
+                 [{apiserver, cuttlefish:conf_get("cluster.k8s.apiserver", Conf)},
+                  {service_name, cuttlefish:conf_get("cluster.k8s.service_name", Conf)},
+                  {address_type, cuttlefish:conf_get("cluster.k8s.address_type", Conf, ip)},
+                  {app_name, cuttlefish:conf_get("cluster.k8s.app_name", Conf)},
+                  {namespace, cuttlefish:conf_get("cluster.k8s.namespace", Conf)}];
+               (manual) ->
+                 [ ]
+            end,
+  {Strategy, Filter(Options(Strategy))}
 end}.
 
 %%--------------------------------------------------------------------
@@ -32,6 +171,19 @@ end}.
 %% @doc Erlang node name
 {mapping, "node.name", "vm_args.-name", [
   {default, "emq@127.0.0.1"}
+]}.
+
+%% @doc The erlang distributed protocol
+{mapping, "node.proto_dist", "vm_args.-proto_dist", [
+  {default, "inet_tcp"},
+  {datatype, {enum, [inet_tcp, inet6_tcp, inet_tls]}},
+  hidden
+]}.
+
+%% @doc Specify SSL Options in the file if using SSL for erlang distribution
+{mapping, "node.ssl_dist_optfile", "vm_args.-ssl_dist_optfile", [
+  {datatype, string},
+  hidden
 ]}.
 
 %% @doc Secret cookie for distributed erlang node
@@ -192,9 +344,43 @@ end}.
   {datatype, file}
 ]}.
 
+{mapping, "log.console.size", "lager.handlers", [
+  {default, 10485760},
+  {datatype, integer}
+]}.
+
+{mapping, "log.console.count", "lager.handlers", [
+  {default, 5},
+  {datatype, integer}
+]}.
+
+{mapping, "log.info.file", "lager.handlers", [
+  {datatype, file}
+]}.
+
+{mapping, "log.info.size", "lager.handlers", [
+  {default, 10485760},
+  {datatype, integer}
+]}.
+
+{mapping, "log.info.count", "lager.handlers", [
+  {default, 5},
+  {datatype, integer}
+]}.
+
 {mapping, "log.error.file", "lager.handlers", [
   {default, "log/error.log"},
   {datatype, file}
+]}.
+
+{mapping, "log.error.size", "lager.handlers", [
+  {default, 10485760},
+  {datatype, integer}
+]}.
+
+{mapping, "log.error.count", "lager.handlers", [
+  {default, 5},
+  {datatype, integer}
 ]}.
 
 {mapping, "log.syslog", "lager.handlers", [
@@ -232,13 +418,22 @@ end}.
 {translation,
  "lager.handlers",
  fun(Conf) ->
-    ErrorHandler = case cuttlefish:conf_get("log.error.file", Conf) of
+    ErrorHandler = case cuttlefish:conf_get("log.error.file", Conf, undefined) of
       undefined -> [];
       ErrorFilename -> [{lager_file_backend, [{file, ErrorFilename},
                                               {level, error},
-                                              {size, 10485760},
+                                              {size, cuttlefish:conf_get("log.error.size", Conf)},
                                               {date, "$D0"},
-                                              {count, 5}]}]
+                                              {count, cuttlefish:conf_get("log.error.count", Conf)}]}]
+    end,
+
+    InfoHandler = case cuttlefish:conf_get("log.info.file", Conf, undefined) of
+      undefined -> [];
+      InfoFilename -> [{lager_file_backend, [{file, InfoFilename},
+                                             {level, info},
+                                             {size, cuttlefish:conf_get("log.info.size", Conf)},
+                                             {date, "$D0"},
+                                             {count, cuttlefish:conf_get("log.info.count", Conf)}]}]
     end,
 
     ConsoleLogLevel = cuttlefish:conf_get("log.console.level", Conf),
@@ -247,9 +442,9 @@ end}.
     ConsoleHandler = {lager_console_backend, ConsoleLogLevel},
     ConsoleFileHandler = {lager_file_backend, [{file, ConsoleLogFile},
                                                {level, ConsoleLogLevel},
-                                               {size, 10485760},
+                                               {size, cuttlefish:conf_get("log.console.size", Conf)},
                                                {date, "$D0"},
-                                               {count, 5}]},
+                                               {count, cuttlefish:conf_get("log.console.count", Conf)}]},
 
     ConsoleHandlers = case cuttlefish:conf_get("log.console", Conf) of
       off -> [];
@@ -265,8 +460,7 @@ end}.
                    cuttlefish:conf_get("log.syslog.facility", Conf),
                    cuttlefish:conf_get("log.syslog.level", Conf)]}]
     end,
-
-    ConsoleHandlers ++ ErrorHandler ++ SyslogHandler
+    ConsoleHandlers ++ ErrorHandler ++ InfoHandler ++ SyslogHandler
   end
 }.
 
@@ -340,9 +534,16 @@ end}.
   {datatype, bytesize}
 ]}.
 
+%% @doc Keepalive backoff
+{mapping, "mqtt.keepalive_backoff", "emqttd.protocol", [
+  {default, 1.25},
+  {datatype, float}
+]}.
+
 {translation, "emqttd.protocol", fun(Conf) ->
   [{max_clientid_len, cuttlefish:conf_get("mqtt.max_clientid_len", Conf)},
-   {max_packet_size,  cuttlefish:conf_get("mqtt.max_packet_size", Conf)}]
+   {max_packet_size, cuttlefish:conf_get("mqtt.max_packet_size", Conf)},
+   {keepalive_backoff, cuttlefish:conf_get("mqtt.keepalive_backoff", Conf)}]
 end}.
 
 {mapping, "mqtt.websocket_protocol_header", "emqttd.websocket_protocol_header", [
@@ -483,13 +684,13 @@ end}.
 %% @doc Low-water mark of queued messages
 {mapping, "mqtt.mqueue.low_watermark", "emqttd.mqueue", [
   {default, "20%"},
-  {datatype, string}
+  {datatype, {percent, float}}
 ]}.
 
 %% @doc High-water mark of queued messages
 {mapping, "mqtt.mqueue.high_watermark", "emqttd.mqueue", [
   {default, "60%"},
-  {datatype, string}
+  {datatype, {percent, float}}
 ]}.
 
 %% @doc Queue Qos0 messages?
@@ -499,14 +700,10 @@ end}.
 ]}.
 
 {translation, "emqttd.mqueue", fun(Conf) ->
-  Parse = fun(S) ->
-			{match, [N]} = re:run(S, "^([0-9]+)%$", [{capture, all_but_first, list}]),
-			list_to_integer(N) / 100
-	      end,
   Opts = [{type, cuttlefish:conf_get("mqtt.mqueue.type", Conf, simple)},
           {max_length, cuttlefish:conf_get("mqtt.mqueue.max_length", Conf)},
-          {low_watermark, Parse(cuttlefish:conf_get("mqtt.mqueue.low_watermark", Conf))},
-          {high_watermark, Parse(cuttlefish:conf_get("mqtt.mqueue.high_watermark", Conf))},
+          {low_watermark, cuttlefish:conf_get("mqtt.mqueue.low_watermark", Conf)},
+          {high_watermark, cuttlefish:conf_get("mqtt.mqueue.high_watermark", Conf)},
           {store_qos0, cuttlefish:conf_get("mqtt.mqueue.store_qos0", Conf)}],
   case cuttlefish:conf_get("mqtt.mqueue.priority", Conf) of
     undefined -> Opts;
@@ -522,8 +719,8 @@ end}.
 %%--------------------------------------------------------------------
 
 {mapping, "mqtt.broker.sys_interval", "emqttd.broker_sys_interval", [
-  {default, 60},
-  {datatype, integer}
+  {datatype, {duration, ms}},
+  {default, "1m"}
 ]}.
 
 %%--------------------------------------------------------------------
@@ -535,11 +732,6 @@ end}.
   {datatype, integer}
 ]}.
 
-{mapping, "mqtt.pubsub.by_clientid", "emqttd.pubsub", [
-  {default, true},
-  {datatype, {enum, [true, false]}}
-]}.
-
 {mapping, "mqtt.pubsub.async", "emqttd.pubsub", [
   {default, true},
   {datatype, {enum, [true, false]}}
@@ -547,7 +739,6 @@ end}.
 
 {translation, "emqttd.pubsub", fun(Conf) ->
   [{pool_size, cuttlefish:conf_get("mqtt.pubsub.pool_size", Conf)},
-   {by_clientid, cuttlefish:conf_get("mqtt.pubsub.by_clientid", Conf)},
    {async, cuttlefish:conf_get("mqtt.pubsub.async", Conf)}]
 end}.
 
@@ -561,8 +752,8 @@ end}.
 ]}.
 
 {mapping, "mqtt.bridge.ping_down_interval", "emqttd.bridge", [
-  {default, 1},
-  {datatype, integer}
+  {datatype, {duration, ms}},
+  {default, "1s"}
 ]}.
 
 {translation, "emqttd.bridge", fun(Conf) ->
@@ -621,18 +812,30 @@ end}.
 ]}.
 
 {mapping, "listener.tcp.$name.proxy_protocol", "emqttd.listeners", [
-  %%{default, off},
   {datatype, flag}
 ]}.
 
 {mapping, "listener.tcp.$name.proxy_protocol_timeout", "emqttd.listeners", [
-  %%{default, "5s"},
   {datatype, {duration, ms}}
 ]}.
 
+{mapping, "listener.tcp.$name.peer_cert_as_username", "emqttd.listeners", [
+  {datatype, {enum, [cn, dn]}}
+]}.
+
 {mapping, "listener.tcp.$name.backlog", "emqttd.listeners", [
-  {default, 1024},
-  {datatype, integer}
+  {datatype, integer},
+  {default, 1024}
+]}.
+
+{mapping, "listener.tcp.$name.send_timeout", "emqttd.listeners", [
+  {datatype, {duration, ms}},
+  {default, "15s"}
+]}.
+
+{mapping, "listener.tcp.$name.send_timeout_close", "emqttd.listeners", [
+  {datatype, flag},
+  {default, on}
 ]}.
 
 {mapping, "listener.tcp.$name.recbuf", "emqttd.listeners", [
@@ -656,6 +859,11 @@ end}.
 ]}.
 
 {mapping, "listener.tcp.$name.nodelay", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+{mapping, "listener.tcp.$name.reuseaddr", "emqttd.listeners", [
   {datatype, {enum, [true, false]}},
   hidden
 ]}.
@@ -695,18 +903,26 @@ end}.
 ]}.
 
 {mapping, "listener.ssl.$name.proxy_protocol", "emqttd.listeners", [
-  %%{default, off},
   {datatype, flag}
 ]}.
 
 {mapping, "listener.ssl.$name.proxy_protocol_timeout", "emqttd.listeners", [
-  %%{default, "5s"},
   {datatype, {duration, ms}}
 ]}.
 
 {mapping, "listener.ssl.$name.backlog", "emqttd.listeners", [
   {default, 1024},
   {datatype, integer}
+]}.
+
+{mapping, "listener.ssl.$name.send_timeout", "emqttd.listeners", [
+  {datatype, {duration, ms}},
+  {default, "15s"}
+]}.
+
+{mapping, "listener.ssl.$name.send_timeout_close", "emqttd.listeners", [
+  {datatype, flag},
+  {default, on}
 ]}.
 
 {mapping, "listener.ssl.$name.recbuf", "emqttd.listeners", [
@@ -730,6 +946,11 @@ end}.
 ]}.
 
 {mapping, "listener.ssl.$name.nodelay", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+{mapping, "listener.ssl.$name.reuseaddr", "emqttd.listeners", [
   {datatype, {enum, [true, false]}},
   hidden
 ]}.
@@ -813,13 +1034,45 @@ end}.
   {datatype, string}
 ]}.
 
+{mapping, "listener.ws.$name.mountpoint", "emqttd.listeners", [
+  {datatype, string}
+]}.
+
 {mapping, "listener.ws.$name.access.$id", "emqttd.listeners", [
   {datatype, string}
+]}.
+
+{mapping, "listener.ws.$name.proxy_address_header", "emqttd.listeners", [
+  {datatype, string},
+  hidden
+]}.
+
+{mapping, "listener.ws.$name.proxy_port_header", "emqttd.listeners", [
+  {datatype, string},
+  hidden
+]}.
+
+{mapping, "listener.ws.$name.proxy_protocol", "emqttd.listeners", [
+  {datatype, flag}
+]}.
+
+{mapping, "listener.ws.$name.proxy_protocol_timeout", "emqttd.listeners", [
+  {datatype, {duration, ms}}
 ]}.
 
 {mapping, "listener.ws.$name.backlog", "emqttd.listeners", [
   {default, 1024},
   {datatype, integer}
+]}.
+
+{mapping, "listener.ws.$name.send_timeout", "emqttd.listeners", [
+  {datatype, {duration, ms}},
+  {default, "15s"}
+]}.
+
+{mapping, "listener.ws.$name.send_timeout_close", "emqttd.listeners", [
+  {datatype, flag},
+  {default, on}
 ]}.
 
 {mapping, "listener.ws.$name.recbuf", "emqttd.listeners", [
@@ -843,6 +1096,11 @@ end}.
 ]}.
 
 {mapping, "listener.ws.$name.nodelay", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+{mapping, "listener.ws.$name.reuseaddr", "emqttd.listeners", [
   {datatype, {enum, [true, false]}},
   hidden
 ]}.
@@ -880,9 +1138,37 @@ end}.
   {datatype, string}
 ]}.
 
+{mapping, "listener.wss.$name.proxy_address_header", "emqttd.listeners", [
+  {datatype, string},
+  hidden
+]}.
+
+{mapping, "listener.wss.$name.proxy_port_header", "emqttd.listeners", [
+  {datatype, string},
+  hidden
+]}.
+
+{mapping, "listener.wss.$name.proxy_protocol", "emqttd.listeners", [
+  {datatype, flag}
+]}.
+
+{mapping, "listener.wss.$name.proxy_protocol_timeout", "emqttd.listeners", [
+  {datatype, {duration, ms}}
+]}.
+
 {mapping, "listener.wss.$name.backlog", "emqttd.listeners", [
   {default, 1024},
   {datatype, integer}
+]}.
+
+{mapping, "listener.wss.$name.send_timeout", "emqttd.listeners", [
+  {datatype, {duration, ms}},
+  {default, "15s"}
+]}.
+
+{mapping, "listener.wss.$name.send_timeout_close", "emqttd.listeners", [
+  {datatype, flag},
+  {default, on}
 ]}.
 
 {mapping, "listener.wss.$name.recbuf", "emqttd.listeners", [
@@ -910,6 +1196,19 @@ end}.
   hidden
 ]}.
 
+{mapping, "listener.wss.$name.reuseaddr", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+{mapping, "listener.wss.$name.tls_versions", "emqttd.listeners", [
+  {datatype, string}
+]}.
+
+{mapping, "listener.wss.$name.ciphers", "emqttd.listeners", [
+  {datatype, string}
+]}.
+
 {mapping, "listener.wss.$name.handshake_timeout", "emqttd.listeners", [
   {default, "15s"},
   {datatype, {duration, ms}}
@@ -933,6 +1232,23 @@ end}.
 
 {mapping, "listener.wss.$name.fail_if_no_peer_cert", "emqttd.listeners", [
   {datatype, {enum, [true, false]}}
+]}.
+
+{mapping, "listener.wss.$name.secure_renegotiate", "emqttd.listeners", [
+  {datatype, flag}
+]}.
+
+{mapping, "listener.wss.$name.reuse_sessions", "emqttd.listeners", [
+  {default, on},
+  {datatype, flag}
+]}.
+
+{mapping, "listener.wss.$name.honor_cipher_order", "emqttd.listeners", [
+  {datatype, flag}
+]}.
+
+{mapping, "listener.wss.$name.peer_cert_as_username", "emqttd.listeners", [
+  {datatype, {enum, [cn, dn]}}
 ]}.
 
 {translation, "emqttd.listeners", fun(Conf) ->
@@ -961,7 +1277,9 @@ end}.
                            {proxy_protocol, cuttlefish:conf_get(Prefix ++ ".proxy_protocol", Conf, undefined)},
                            {proxy_protocol_timeout, cuttlefish:conf_get(Prefix ++ ".proxy_protocol_timeout", Conf, undefined)},
                            {mountpoint, MountPoint(cuttlefish:conf_get(Prefix ++ ".mountpoint", Conf, undefined))},
-                           {peer_cert_as_username, cuttlefish:conf_get(Prefix ++ ".peer_cert_as_username", Conf, undefined)}])
+                           {peer_cert_as_username, cuttlefish:conf_get(Prefix ++ ".peer_cert_as_username", Conf, undefined)},
+                           {proxy_port_header, cuttlefish:conf_get(Prefix ++ ".proxy_port_header", Conf, undefined)},
+                           {proxy_address_header, cuttlefish:conf_get(Prefix ++ ".proxy_address_header", Conf, undefined)}])
                end,
 
     LisOpts = fun(Prefix) ->
@@ -971,10 +1289,13 @@ end}.
               end,
     TcpOpts = fun(Prefix) ->
                    Filter([{backlog, cuttlefish:conf_get(Prefix ++ ".backlog", Conf, undefined)},
+                           {send_timeout, cuttlefish:conf_get(Prefix ++ ".send_timeout", Conf, undefined)},
+                           {send_timeout_close, cuttlefish:conf_get(Prefix ++ ".send_timeout_close", Conf, undefined)},
                            {recbuf,  cuttlefish:conf_get(Prefix ++ ".recbuf", Conf, undefined)},
                            {sndbuf,  cuttlefish:conf_get(Prefix ++ ".sndbuf", Conf, undefined)},
                            {buffer,  cuttlefish:conf_get(Prefix ++ ".buffer", Conf, undefined)},
-                           {nodelay, cuttlefish:conf_get(Prefix ++ ".nodelay", Conf, true)}])
+                           {nodelay, cuttlefish:conf_get(Prefix ++ ".nodelay", Conf, true)},
+                           {reuseaddr, cuttlefish:conf_get(Prefix ++ ".reuseaddr", Conf, true)}])
               end,
 
     SplitFun = fun(undefined) -> undefined; (S) -> string:tokens(S, ",") end,
@@ -1004,7 +1325,8 @@ end}.
                            undefined ->
                                [];
                            ListenOn ->
-                               [{Atom(Type), ListenOn, [{connopts, ConnOpts(Prefix)}, {sockopts, TcpOpts(Prefix)} | LisOpts(Prefix)]}]
+                               [{Atom(Type), ListenOn, [{connopts, ConnOpts(Prefix)},
+                                                        {sockopts, TcpOpts(Prefix)} | LisOpts(Prefix)]}]
                        end
                    end,
 
@@ -1078,6 +1400,16 @@ end}.
   {datatype, integer}
 ]}.
 
+{mapping, "listener.api.$name.send_timeout", "emqttd.listeners", [
+  {datatype, {duration, ms}},
+  {default, "15s"}
+]}.
+
+{mapping, "listener.api.$name.send_timeout_close", "emqttd.listeners", [
+  {datatype, flag},
+  {default, on}
+]}.
+
 {mapping, "listener.api.$name.recbuf", "emqttd.listeners", [
   {datatype, bytesize},
   hidden
@@ -1099,6 +1431,11 @@ end}.
 ]}.
 
 {mapping, "listener.api.$name.nodelay", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+{mapping, "listener.api.$name.reuseaddr", "emqttd.listeners", [
   {datatype, {enum, [true, false]}},
   hidden
 ]}.

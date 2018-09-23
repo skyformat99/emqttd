@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@
 
 -export([load/0]).
 
--export([status/1, broker/1, cluster/1, users/1, clients/1, sessions/1,
+-export([status/1, broker/1, cluster/1, clients/1, sessions/1,
          routes/1, topics/1, subscriptions/1, plugins/1, bridges/1,
          listeners/1, vm/1, mnesia/1, trace/1, acl/1]).
 
@@ -48,7 +48,8 @@
 
 load() ->
     Cmds = [Fun || {Fun, _} <- ?MODULE:module_info(exports), is_cmd(Fun)],
-    [emqttd_ctl:register_cmd(Cmd, {?MODULE, Cmd}, []) || Cmd <- Cmds].
+    [emqttd_ctl:register_cmd(Cmd, {?MODULE, Cmd}, []) || Cmd <- Cmds],
+    emqttd_cli_config:register_config().
 
 is_cmd(Fun) ->
     not lists:member(Fun, [init, load, module_info]).
@@ -111,16 +112,18 @@ broker(_) ->
 %% @doc Cluster with other nodes
 
 cluster(["join", SNode]) ->
-    case emqttd_cluster:join(emqttd_node:parse_name(SNode)) of
+    case ekka:join(ekka_node:parse_name(SNode)) of
         ok ->
             ?PRINT_MSG("Join the cluster successfully.~n"),
             cluster(["status"]);
+        ignore ->
+            ?PRINT_MSG("Ignore.~n");
         {error, Error} ->
             ?PRINT("Failed to join the cluster: ~p~n", [Error])
     end;
 
 cluster(["leave"]) ->
-    case emqttd_cluster:leave() of
+    case ekka:leave() of
         ok ->
             ?PRINT_MSG("Leave the cluster successfully.~n"),
             cluster(["status"]);
@@ -128,28 +131,28 @@ cluster(["leave"]) ->
             ?PRINT("Failed to leave the cluster: ~p~n", [Error])
     end;
 
-cluster(["remove", SNode]) ->
-    case emqttd_cluster:remove(emqttd_node:parse_name(SNode)) of
+cluster(["force-leave", SNode]) ->
+    case ekka:force_leave(ekka_node:parse_name(SNode)) of
         ok ->
             ?PRINT_MSG("Remove the node from cluster successfully.~n"),
             cluster(["status"]);
+        ignore ->
+            ?PRINT_MSG("Ignore.~n");
         {error, Error} ->
             ?PRINT("Failed to remove the node from cluster: ~p~n", [Error])
     end;
 
 cluster(["status"]) ->
-    ?PRINT("Cluster status: ~p~n", [emqttd_cluster:status()]);
+    ?PRINT("Cluster status: ~p~n", [ekka_cluster:status()]);
 
 cluster(_) ->
-    ?USAGE([{"cluster join <Node>",  "Join the cluster"},
-            {"cluster leave",        "Leave the cluster"},
-            {"cluster remove <Node>","Remove the node from cluster"},
-            {"cluster status",       "Cluster status"}]).
+    ?USAGE([{"cluster join <Node>",       "Join the cluster"},
+            {"cluster leave",             "Leave the cluster"},
+            {"cluster force-leave <Node>","Force the node leave from cluster"},
+            {"cluster status",            "Cluster status"}]).
 
 %%--------------------------------------------------------------------
-%% @doc Users usage
-
-users(Args) -> emq_auth_username:cli(Args).
+%% @doc ACL reload
 
 acl(["reload"]) -> emqttd_access_control:reload_acl();
 acl(_) -> ?USAGE([{"acl reload", "reload etc/acl.conf"}]).
@@ -213,7 +216,9 @@ routes(["list"]) ->
     foreach(fun print/1, Routes);
 
 routes(["show", Topic]) ->
-    print(mnesia:dirty_read(mqtt_route, bin(Topic)));
+    Routes = lists:append(ets:lookup(mqtt_route, bin(Topic)),
+                          ets:lookup(mqtt_local_route, bin(Topic))),
+    foreach(fun print/1, Routes);
 
 routes(_) ->
     ?USAGE([{"routes list",         "List all routes"},
@@ -238,41 +243,38 @@ subscriptions(["list"]) ->
                   end, ets:tab2list(mqtt_subscription));
 
 subscriptions(["show", ClientId]) ->
-    case ets:lookup(mqtt_subscription, bin(ClientId)) of
-        []      -> ?PRINT_MSG("Not Found.~n");
-        Records -> [print(subscription, Subscription) || Subscription <- Records]
+    case emqttd:subscriptions(bin(ClientId)) of
+        [] ->
+            ?PRINT_MSG("Not Found.~n");
+        Subscriptions ->
+            [print(subscription, Sub) || Sub <- Subscriptions]
     end;
 
-
 subscriptions(["add", ClientId, Topic, QoS]) ->
-   Add = fun(IntQos) ->
-           case emqttd:subscribe(bin(Topic), bin(ClientId), [{qos, IntQos}]) of
-               ok ->
-                   ?PRINT_MSG("ok~n");
-               {error, already_existed} ->
-                   ?PRINT_MSG("Error: already existed~n");
-               {error, Reason} ->
-                   ?PRINT("Error: ~p~n", [Reason])
-           end
-         end,
-   if_valid_qos(QoS, Add);
-
-
-
-subscriptions(["del", ClientId]) ->
-   Ok = emqttd:subscriber_down(bin(ClientId)),
-   ?PRINT("~p~n", [Ok]);
+   if_valid_qos(QoS, fun(IntQos) ->
+                        case emqttd_sm:lookup_session(bin(ClientId)) of
+                            undefined ->
+                                ?PRINT_MSG("Error: Session not found!");
+                            #mqtt_session{sess_pid = SessPid} ->
+                                {Topic1, Options} = emqttd_topic:parse(bin(Topic)),
+                                emqttd_session:subscribe(SessPid, [{Topic1, [{qos, IntQos}|Options]}]),
+                                ?PRINT_MSG("ok~n")
+                        end
+                     end);
 
 subscriptions(["del", ClientId, Topic]) ->
-   Ok = emqttd:unsubscribe(bin(Topic), bin(ClientId)),
-   ?PRINT("~p~n", [Ok]);
-
+    case emqttd_sm:lookup_session(bin(ClientId)) of
+        undefined ->
+            ?PRINT_MSG("Error: Session not found!");
+        #mqtt_session{sess_pid = SessPid} ->
+            emqttd_session:unsubscribe(SessPid, [emqttd_topic:parse(bin(Topic))]),
+            ?PRINT_MSG("ok~n")
+    end;
 
 subscriptions(_) ->
     ?USAGE([{"subscriptions list",                         "List all subscriptions"},
             {"subscriptions show <ClientId>",              "Show subscriptions of a client"},
             {"subscriptions add <ClientId> <Topic> <QoS>", "Add a static subscription manually"},
-            {"subscriptions del <ClientId>",               "Delete static subscriptions manually"},
             {"subscriptions del <ClientId> <Topic>",       "Delete a static subscription manually"}]).
 
 % if_could_print(Tab, Fun) ->
@@ -456,7 +458,7 @@ trace_on(Who, Name, LogFile) ->
 
 trace_off(Who, Name) ->
     case emqttd_trace:stop_trace({Who, iolist_to_binary(Name)}) of
-        ok -> 
+        ok ->
             ?PRINT("stop tracing ~s ~s successfully.~n", [Who, Name]);
         {error, Error} ->
             ?PRINT("stop tracing ~s ~s error: ~p.~n", [Who, Name, Error])
@@ -477,8 +479,34 @@ listeners([]) ->
                         end, Info)
             end, esockd:listeners());
 
+listeners(["start", Proto, ListenOn]) ->
+    case emqttd_app:start_listener({list_to_atom(Proto), parse_listenon(ListenOn), []}) of
+        {ok, _Pid} ->
+            io:format("Start ~s listener on ~s successfully.~n", [Proto, ListenOn]);
+        {error, Error} ->
+            io:format("Failed to Start ~s listener on ~s, error:~p~n", [Proto, ListenOn, Error])
+    end;
+
+listeners(["restart", Proto, ListenOn]) ->
+    case emqttd_app:restart_listener({list_to_atom(Proto), parse_listenon(ListenOn), []}) of
+        {ok, _Pid} ->
+            io:format("Restart ~s listener on ~s successfully.~n", [Proto, ListenOn]);
+        {error, Error} ->
+            io:format("Failed to restart ~s listener on ~s, error:~p~n", [Proto, ListenOn, Error])
+    end;
+
+listeners(["stop", Proto, ListenOn]) ->
+    case emqttd_app:stop_listener({list_to_atom(Proto), parse_listenon(ListenOn), []}) of
+        ok ->
+            io:format("Stop ~s listener on ~s successfully.~n", [Proto, ListenOn]);
+        {error, Error} ->
+            io:format("Failed to stop ~s listener on ~s, error:~p~n", [Proto, ListenOn, Error])
+    end;
+
 listeners(_) ->
-    ?PRINT_CMD("listeners", "List listeners").
+    ?USAGE([{"listeners",                        "List listeners"},
+            {"listeners restart <Proto> <Port>", "Restart a listener"},
+            {"listeners stop    <Proto> <Port>", "Stop a listener"}]).
 
 %%--------------------------------------------------------------------
 %% Dump ETS
@@ -550,14 +578,25 @@ print({ClientId, _ClientPid, _Persistent, SessInfo}) ->
            "deliver_msg=~w, enqueue_msg=~w, created_at=~w)~n",
             [ClientId | [format(Key, get_value(Key, Data)) || Key <- InfoKeys]]).
 
-print(subscription, {Sub, {_Share, Topic}}) when is_pid(Sub) ->
+print(subscription, {Sub, {share, _Share, Topic}}) when is_pid(Sub) ->
     ?PRINT("~p -> ~s~n", [Sub, Topic]);
 print(subscription, {Sub, Topic}) when is_pid(Sub) ->
     ?PRINT("~p -> ~s~n", [Sub, Topic]);
-print(subscription, {Sub, {_Share, Topic}}) ->
-    ?PRINT("~s -> ~s~n", [Sub, Topic]);
-print(subscription, {Sub, Topic}) ->
-    ?PRINT("~s -> ~s~n", [Sub, Topic]).
+print(subscription, {{SubId, SubPid}, {share, _Share, Topic}})
+    when is_binary(SubId), is_pid(SubPid) ->
+    ?PRINT("~s~p -> ~s~n", [SubId, SubPid, Topic]);
+print(subscription, {{SubId, SubPid}, Topic})
+    when is_binary(SubId), is_pid(SubPid) ->
+    ?PRINT("~s~p -> ~s~n", [SubId, SubPid, Topic]);
+print(subscription, {Sub, Topic, Props}) ->
+    print(subscription, {Sub, Topic}),
+    lists:foreach(fun({K, V}) when is_binary(V) ->
+                      ?PRINT("  ~-8s: ~s~n", [K, V]);
+                     ({K, V}) ->
+                      ?PRINT("  ~-8s: ~w~n", [K, V]);
+                     (K) ->
+                      ?PRINT("  ~-8s: true~n", [K])
+                  end, Props).
 
 format(created_at, Val) ->
     emqttd_time:now_secs(Val);
@@ -567,3 +606,8 @@ format(_, Val) ->
 
 bin(S) -> iolist_to_binary(S).
 
+parse_listenon(ListenOn) ->
+    case string:tokens(ListenOn, ":") of
+        [Port]     -> list_to_integer(Port);
+        [IP, Port] -> {IP, list_to_integer(Port)}
+    end.

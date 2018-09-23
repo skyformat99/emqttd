@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc.
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ start_link() ->
 %% API
 %%--------------------------------------------------------------------
 
--spec(start_link(atom(), pos_integer()) -> {ok, pid()} | ignore | {error, any()}).
+-spec(start_link(atom(), pos_integer()) -> {ok, pid()} | ignore | {error, term()}).
 start_link(Pool, Id) ->
     gen_server:start_link({local, ?PROC_NAME(?MODULE, Id)}, ?MODULE, [Pool, Id], []).
 

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -63,12 +63,12 @@ passwd_hash(sha256, Password)  ->
 passwd_hash(pbkdf2, {Salt, Password, Macfun, Iterations, Dklen}) ->
     case pbkdf2:pbkdf2(Macfun, Password, Salt, Iterations, Dklen) of
         {ok, Hexstring} -> pbkdf2:to_hex(Hexstring);
-        {error, Error} -> lager:error("PasswdHash with pbkdf2 error:~p", [Error]), error
+        {error, Error} -> lager:error("PasswdHash with pbkdf2 error:~p", [Error]), <<>>
     end;
 passwd_hash(bcrypt, {Salt, Password}) ->
     case bcrypt:hashpw(Password, Salt) of
         {ok, HashPassword} -> list_to_binary(HashPassword);
-        {error, Error}-> lager:error("PasswdHash with bcrypt error:~p", [Error]), error
+        {error, Error}-> lager:error("PasswdHash with bcrypt error:~p", [Error]), <<>>
     end.
 
 hexstring(<<X:128/big-unsigned-integer>>) ->

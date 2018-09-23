@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -47,7 +47,7 @@
 %%--------------------------------------------------------------------
 
 %% @doc Start Client Manager
--spec(start_link(atom(), pos_integer(), fun()) -> {ok, pid()} | ignore | {error, any()}).
+-spec(start_link(atom(), pos_integer(), fun()) -> {ok, pid()} | ignore | {error, term()}).
 start_link(Pool, Id, StatsFun) ->
     gen_server2:start_link(?MODULE, [Pool, Id, StatsFun], []).
 
@@ -152,6 +152,7 @@ monitor_client(ClientId, Pid, State = #state{monitors = Monitors}) ->
     State#state{monitors = dict:store(MRef, {ClientId, Pid}, Monitors)}.
 
 erase_monitor(MRef, State = #state{monitors = Monitors}) ->
+    erlang:demonitor(MRef, [flush]),
     State#state{monitors = dict:erase(MRef, Monitors)}.
 
 setstats(State = #state{statsfun = StatsFun}) ->

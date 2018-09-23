@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@
 -export([start_link/4]).
 
 %% Management and Monitor API
--export([info/1, stats/1, kick/1]).
+-export([info/1, stats/1, kick/1, clean_acl_cache/2]).
 
 %% SUB/UNSUB Asynchronously
 -export([subscribe/2, unsubscribe/2]).
@@ -82,29 +82,40 @@ unsubscribe(CPid, Topics) ->
 session(CPid) ->
     gen_server2:call(CPid, session).
 
+clean_acl_cache(CPid, Topic) ->
+    gen_server2:call(CPid, {clean_acl_cache, Topic}).
+
 %%--------------------------------------------------------------------
 %% gen_server Callbacks
 %%--------------------------------------------------------------------
 
 init([Env, WsPid, Req, ReplyChannel]) ->
     process_flag(trap_exit, true),
-    true = link(WsPid),
-    {ok, Peername} = Req:get(peername),
-    Headers = mochiweb_headers:to_list(
-                mochiweb_request:get(headers, Req)),
     Conn = Req:get(connection),
-    ProtoState = emqttd_protocol:init(Conn, Peername, send_fun(ReplyChannel),
-                                      [{ws_initial_headers, Headers} | Env]),
-    IdleTimeout = get_value(client_idle_timeout, Env, 30000),
-    EnableStats = get_value(client_enable_stats, Env, false),
-    ForceGcCount = emqttd_gc:conn_max_gc_count(),
-    {ok, #wsclient_state{connection     = Conn,
-                         ws_pid         = WsPid,
-                         peername       = Peername,
-                         proto_state    = ProtoState,
-                         enable_stats   = EnableStats,
-                         force_gc_count = ForceGcCount},
-     IdleTimeout, {backoff, 2000, 2000, 20000}, ?MODULE}.
+    true = link(WsPid),
+    case Req:get(peername) of
+        {ok, Peername} ->
+            Headers = mochiweb_headers:to_list(
+                        mochiweb_request:get(headers, Req)),
+            ProtoState = emqttd_protocol:init(Conn, Peername, send_fun(ReplyChannel),
+                                              [{ws_initial_headers, Headers} | Env]),
+            IdleTimeout = get_value(client_idle_timeout, Env, 30000),
+            EnableStats = get_value(client_enable_stats, Env, false),
+            ForceGcCount = emqttd_gc:conn_max_gc_count(),
+            {ok, #wsclient_state{connection     = Conn,
+                                 ws_pid         = WsPid,
+                                 peername       = Peername,
+                                 proto_state    = ProtoState,
+                                 enable_stats   = EnableStats,
+                                 force_gc_count = ForceGcCount},
+             IdleTimeout, {backoff, 2000, 2000, 20000}, ?MODULE};
+        {error, enotconn} -> Conn:fast_close(),
+                             exit(WsPid, normal),
+                             exit(normal);
+        {error, Reason}   -> Conn:fast_close(),
+                             exit(WsPid, normal),
+                             exit({shutdown, Reason})
+    end.
 
 prioritise_call(Msg, _From, _Len, _State) ->
     case Msg of info -> 10; stats -> 10; state -> 10; _ -> 5 end.
@@ -132,6 +143,10 @@ handle_call(kick, _From, State) ->
 
 handle_call(session, _From, State = #wsclient_state{proto_state = ProtoState}) ->
     reply(emqttd_protocol:session(ProtoState), State);
+
+handle_call({clean_acl_cache, Topic}, _From, State) ->
+    erase({acl, publish, Topic}),
+    reply(ok, State);
 
 handle_call(Req, _From, State) ->
     ?WSLOG(error, "Unexpected request: ~p", [Req], State),
@@ -196,6 +211,9 @@ handle_info({shutdown, conflict, {ClientId, NewPid}}, State) ->
     ?WSLOG(warning, "clientid '~s' conflict with ~p", [ClientId, NewPid], State),
     shutdown(conflict, State);
 
+handle_info({shutdown, Reason}, State) ->
+    shutdown(Reason, State);
+
 handle_info({keepalive, start, Interval}, State = #wsclient_state{connection = Conn}) ->
     ?WSLOG(debug, "Keepalive at the interval of ~p", [Interval], State),
     case emqttd_keepalive:start(stat_fun(Conn), Interval, {keepalive, check}) of
@@ -254,10 +272,14 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 
 send_fun(ReplyChannel) ->
+    Self = self(),
     fun(Packet) ->
         Data = emqttd_serializer:serialize(Packet),
         emqttd_metrics:inc('bytes/sent', iolist_size(Data)),
-        ReplyChannel({binary, Data})
+        case ReplyChannel({binary, Data}) of
+            ok -> ok;
+            {error, Reason} -> Self ! {shutdown, Reason}
+        end
     end.
 
 stat_fun(Conn) ->

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 
 -define(N, 10000).
 
-all() -> [t_wildcard, t_match, t_match2, t_validate, t_triples, t_join,
+all() -> [t_wildcard, t_match, t_match2, t_match3, t_validate, t_triples, t_join,
           t_words, t_systop, t_feed_var, t_sys_match, 't_#_match',
           t_sigle_level_validate, t_sigle_level_match, t_match_perf,
           t_triples_perf, t_parse].
@@ -71,6 +71,14 @@ t_match2(_) ->
     false = match(<<"$shared/x/y">>, <<"+/+/#">>),
     false = match(<<"house/1/sensor/0">>, <<"house/+">>).
 
+t_match3(_) ->
+    true = match(<<"device/60019423a83c/fw">>, <<"device/60019423a83c/#">>),
+    true = match(<<"device/60019423a83c/$fw">>, <<"device/60019423a83c/#">>),
+    true = match(<<"device/60019423a83c/$fw/fw">>, <<"device/60019423a83c/$fw/#">>),
+    true = match(<<"device/60019423a83c/fw/checksum">>, <<"device/60019423a83c/#">>),
+    true = match(<<"device/60019423a83c/$fw/checksum">>, <<"device/60019423a83c/#">>),
+    true = match(<<"device/60019423a83c/dust/type">>, <<"device/60019423a83c/#">>).
+
 t_sigle_level_match(_) ->
     true  = match(<<"sport/tennis/player1">>, <<"sport/tennis/+">>),
     false = match(<<"sport/tennis/player1/ranking">>, <<"sport/tennis/+">>),
@@ -78,7 +86,9 @@ t_sigle_level_match(_) ->
     true  = match(<<"sport/">>, <<"sport/+">>),
     true  = match(<<"/finance">>, <<"+/+">>),
     true  = match(<<"/finance">>, <<"/+">>),
-    false = match(<<"/finance">>, <<"+">>).
+    false = match(<<"/finance">>, <<"+">>),
+    true  = match(<<"/devices/$dev1">>, <<"/devices/+">>),
+    true  = match(<<"/devices/$dev1/online">>, <<"/devices/+/online">>).
 
 t_sys_match(_) ->
     true  = match(<<"$SYS/broker/clients/testclient">>, <<"$SYS/#">>),
@@ -87,9 +97,11 @@ t_sys_match(_) ->
     false = match(<<"$SYS/broker">>, <<"#">>).
 
 't_#_match'(_) ->
-    true = match(<<"a/b/c">>, <<"#">>),
-    true = match(<<"a/b/c">>, <<"+/#">>),
-    false = match(<<"$SYS/brokers">>, <<"#">>).
+    true  = match(<<"a/b/c">>, <<"#">>),
+    true  = match(<<"a/b/c">>, <<"+/#">>),
+    false = match(<<"$SYS/brokers">>, <<"#">>),
+    true  = match(<<"a/b/$c">>, <<"a/b/#">>),
+    true  = match(<<"a/b/$c">>, <<"a/#">>).
 
 t_match_perf(_) ->
     true = match(<<"a/b/ccc">>, <<"a/#">>),

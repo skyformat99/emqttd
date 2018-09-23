@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,26 +27,24 @@
 %% Application callbacks
 -export([start/2, stop/1]).
 
--export([start_listener/1, stop_listener/1]).
+-export([start_listener/1, stop_listener/1, restart_listener/1]).
 
 -type(listener() :: {atom(), esockd:listen_on(), [esockd:option()]}).
 
 -define(APP, emqttd).
 
 %%--------------------------------------------------------------------
-%% Application callbacks
+%% Application Callbacks
 %%--------------------------------------------------------------------
 
 start(_Type, _Args) ->
     print_banner(),
-    emqttd_mnesia:start(),
+    ekka:start(),
     {ok, Sup} = emqttd_sup:start_link(),
     start_servers(Sup),
     emqttd_cli:load(),
     register_acl_mod(),
-    emqttd_plugins:init(),
-    emqttd_plugins:load(),
-    start_listeners(),
+    start_autocluster(),
     register(emqttd, self()),
     print_vsn(),
     {ok, Sup}.
@@ -147,6 +145,20 @@ register_acl_mod() ->
     end.
 
 %%--------------------------------------------------------------------
+%% Autocluster
+%%--------------------------------------------------------------------
+
+start_autocluster() ->
+    ekka:callback(prepare, fun emqttd:shutdown/1),
+    ekka:callback(reboot,  fun emqttd:reboot/0),
+    ekka:autocluster(?APP, fun after_autocluster/0).
+
+after_autocluster() ->
+    emqttd_plugins:init(),
+    emqttd_plugins:load(),
+    start_listeners().
+
+%%--------------------------------------------------------------------
 %% Start Listeners
 %%--------------------------------------------------------------------
 
@@ -172,7 +184,7 @@ start_listener({Proto, ListenOn, Opts}) when Proto == https; Proto == wss ->
     mochiweb:start_http('mqtt:wss', ListenOn, Opts, {emqttd_ws, handle_request, []});
 
 start_listener({Proto, ListenOn, Opts}) when Proto == api ->
-    mochiweb:start_http('mqtt:api', ListenOn, Opts, {emqttd_http, handle_request, []}).
+    mochiweb:start_http('mqtt:api', ListenOn, Opts, emqttd_http:http_handler()).
 
 start_listener(Proto, ListenOn, Opts) ->
     Env = lists:append(emqttd:env(client, []), emqttd:env(protocol, [])),
@@ -191,6 +203,7 @@ merge_sockopts(Options) ->
 %% @doc Stop Listeners
 stop_listeners() -> lists:foreach(fun stop_listener/1, emqttd:env(listeners, [])).
 
+
 %% @private
 stop_listener({tcp, ListenOn, _Opts}) ->
     esockd:close('mqtt:tcp', ListenOn);
@@ -205,6 +218,21 @@ stop_listener({Proto, ListenOn, _Opts}) when Proto == api ->
 stop_listener({Proto, ListenOn, _Opts}) ->
     esockd:close(Proto, ListenOn).
 
+%% @doc Restart Listeners
+restart_listener({tcp, ListenOn, _Opts}) ->
+    esockd:reopen('mqtt:tcp', ListenOn);
+restart_listener({ssl, ListenOn, _Opts}) ->
+    esockd:reopen('mqtt:ssl', ListenOn);
+restart_listener({Proto, ListenOn, _Opts}) when Proto == http; Proto == ws ->
+    mochiweb:restart_http('mqtt:ws', ListenOn);
+restart_listener({Proto, ListenOn, _Opts}) when Proto == https; Proto == wss ->
+    mochiweb:restart_http('mqtt:wss', ListenOn);
+restart_listener({Proto, ListenOn, _Opts}) when Proto == api ->
+    mochiweb:restart_http('mqtt:api', ListenOn);
+restart_listener({Proto, ListenOn, _Opts}) ->
+    esockd:reopen(Proto, ListenOn).
+
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 merge_sockopts_test_() ->
@@ -212,4 +240,3 @@ merge_sockopts_test_() ->
     ?_assert(merge_sockopts(Opts) == [{sockopts, ?MQTT_SOCKOPTS} | Opts]).
 
 -endif.
-

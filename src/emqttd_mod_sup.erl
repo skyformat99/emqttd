@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ start_child(ChildSpec) when is_tuple(ChildSpec) ->
 start_child(Mod, Type) when is_atom(Mod) andalso is_atom(Type) ->
     supervisor:start_child(?MODULE, ?CHILD(Mod, Type)).
 
--spec(stop_child(any()) -> ok | {error, any()}).
+-spec(stop_child(any()) -> ok | {error, term()}).
 stop_child(ChildId) ->
     case supervisor:terminate_child(?MODULE, ChildId) of
         ok    -> supervisor:delete_child(?MODULE, ChildId);

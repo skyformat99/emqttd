@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@
 -export([subscribe/1, notify/2]).
 
 %% Broker API
--export([version/0, uptime/0, datetime/0, sysdescr/0]).
+-export([version/0, uptime/0, datetime/0, sysdescr/0, info/0]).
 
 %% Tick API
 -export([start_tick/1, stop_tick/1]).
@@ -40,7 +40,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {started_at, sys_interval, heartbeat, tick_tref, version, sysdescr}).
+-record(state, {started_at, sys_interval, heartbeat, ticker, version, sysdescr}).
 
 -define(APP, emqttd).
 
@@ -61,7 +61,7 @@
 %%--------------------------------------------------------------------
 
 %% @doc Start emqttd broker
--spec(start_link() -> {ok, pid()} | ignore | {error, any()}).
+-spec(start_link() -> {ok, pid()} | ignore | {error, term()}).
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
@@ -74,6 +74,14 @@ subscribe(EventType) ->
 -spec(notify(EventType :: any(), Event :: any()) -> ok).
 notify(EventType, Event) ->
      gproc:send({p, l, {broker, EventType}}, {notify, EventType, self(), Event}).
+
+%% @doc Get broker info
+-spec(info() -> list(tuple())).
+info() ->
+    [{version,  version()},
+     {sysdescr, sysdescr()},
+     {uptime,   uptime()},
+     {datetime, datetime()}].
 
 %% @doc Get broker version
 -spec(version() -> string()).
@@ -97,9 +105,9 @@ datetime() ->
         io_lib:format(
             "~4..0w-~2..0w-~2..0w ~2..0w:~2..0w:~2..0w", [Y, M, D, H, MM, S])).
 
-%% @doc Start a tick timer
+%% @doc Start a tick timer.
 start_tick(Msg) ->
-    start_tick(timer:seconds(emqttd:env(broker_sys_interval, 60)), Msg).
+    start_tick(emqttd:env(broker_sys_interval, 60000), Msg).
 
 start_tick(0, _Msg) ->
     undefined;
@@ -122,9 +130,9 @@ init([]) ->
     % Tick
     {ok, #state{started_at = os:timestamp(),
                 heartbeat  = start_tick(1000, heartbeat),
-                version = list_to_binary(version()),
-                sysdescr = list_to_binary(sysdescr()),
-                tick_tref  = start_tick(tick)}, hibernate}.
+                version    = list_to_binary(version()),
+                sysdescr   = list_to_binary(sysdescr()),
+                ticker     = start_tick(tick)}, hibernate}.
 
 handle_call(uptime, _From, State) ->
     {reply, uptime(State), State};
@@ -149,7 +157,7 @@ handle_info(tick, State = #state{version = Version, sysdescr = Descr}) ->
 handle_info(Info, State) ->
     ?UNEXPECTED_INFO(Info, State).
 
-terminate(_Reason, #state{heartbeat = Hb, tick_tref = TRef}) ->
+terminate(_Reason, #state{heartbeat = Hb, ticker = TRef}) ->
     stop_tick(Hb),
     stop_tick(TRef),
     ok.
@@ -163,7 +171,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 retain(brokers) ->
     Payload = list_to_binary(string:join([atom_to_list(N) ||
-                    N <- emqttd_mnesia:running_nodes()], ",")),
+                    N <- ekka_mnesia:running_nodes()], ",")),
     Msg = emqttd_message:make(broker, <<"$SYS/brokers">>, Payload),
     emqttd:publish(emqttd_message:set_flag(sys, emqttd_message:set_flag(retain, Msg))).
 

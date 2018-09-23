@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -96,13 +96,13 @@
 %% API
 %%--------------------------------------------------------------------
 
-%% @doc Start metrics server
--spec(start_link() -> {ok, pid()} | ignore | {error, any()}).
+%% @doc Start the metrics server
+-spec(start_link() -> {ok, pid()} | ignore | {error, term()}).
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 %% @doc Count packets received.
--spec(received(mqtt_packet()) -> ok).
+-spec(received(mqtt_packet()) -> ignore | non_neg_integer()).
 received(Packet) ->
     inc('packets/received'),
     received1(Packet).
@@ -140,7 +140,7 @@ qos_received(?QOS_2) ->
     inc('messages/qos2/received').
 
 %% @doc Count packets received. Will not count $SYS PUBLISH.
--spec(sent(mqtt_packet()) -> ok).
+-spec(sent(mqtt_packet()) -> ignore | non_neg_integer()).
 sent(?PUBLISH_PACKET(_Qos, <<"$SYS/", _/binary>>, _, _)) ->
     ignore;
 sent(Packet) ->
@@ -169,7 +169,7 @@ sent2(?UNSUBACK) ->
 sent2(?PINGRESP) ->
     inc('packets/pingresp');
 sent2(_Type) ->
-    ingore.
+    ignore.
 qos_sent(?QOS_0) ->
     inc('messages/qos0/sent');
 qos_sent(?QOS_1) ->

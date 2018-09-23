@@ -14,27 +14,39 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
-%% @doc emqttd gen_mod behaviour
+-module(emqttd_cli_SUITE).
 
--module(emqttd_gen_mod).
-
--author("Feng Lee <feng@emqtt.io>").
+-compile(export_all).
 
 -include("emqttd.hrl").
 
--ifdef(use_specs).
+-include_lib("eunit/include/eunit.hrl").
 
--callback(load(Opts :: any()) -> ok | {error, term()}).
+all() ->
+    [{group, subscriptions}].
 
--callback(unload(State :: term()) -> term()).
+groups() ->
+    [{subscriptions, [sequence],
+      [t_subsciptions_list,
+       t_subsciptions_show,
+       t_subsciptions_add,
+       t_subsciptions_del]}].
 
--else.
+init_per_suite(Config) ->
+    Config.
 
--export([behaviour_info/1]).
+end_per_suite(_Config) ->
+    todo.
 
-behaviour_info(callbacks) ->
-    [{load, 1}, {unload, 1}];
-behaviour_info(_Other) ->
-    undefined.
+t_subsciptions_list(_) ->
+    todo.
 
--endif.
+t_subsciptions_show(_) ->
+    todo.
+
+t_subsciptions_add(_) ->
+    todo.
+
+t_subsciptions_del(_) ->
+    todo.
+

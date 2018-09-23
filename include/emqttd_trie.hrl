@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,10 +17,10 @@
 -type(trie_node_id() :: binary() | atom()).
 
 -record(trie_node,
-        { node_id         :: trie_node_id(),
-          edge_count = 0  :: non_neg_integer(),
-          topic           :: binary() | undefined,
-          flags           :: [retained | static]
+        { node_id        :: trie_node_id(),
+          edge_count = 0 :: non_neg_integer(),
+          topic          :: binary() | undefined,
+          flags          :: [retained | static]
         }).
 
 -record(trie_edge,
